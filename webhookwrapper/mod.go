@@ -15,18 +15,17 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
 type WebhookRegistrator struct {
-	Registrator func(ctrl.Manager) error
-	GVK         schema.GroupVersionKind
-	Resources   []string
-	Mutating    bool
-	WebhookPath string
+	Registrator         func(ctrl.Manager) error
+	Name                string
+	RulesWithOperations []admissionregistrationv1.RuleWithOperations
+	Mutating            bool
+	WebhookPath         string
 }
 type WebhookRegistrators = []WebhookRegistrator
 
@@ -118,7 +117,6 @@ func registerWebhooks(logger logr.Logger, mgr ctrl.Manager, webhookAdvertiseHost
 		if !developmentMode {
 			continue
 		}
-		webhookName := fmt.Sprintf("%s.%s.%s.webhook.wrapper", webhookRegistrator.GVK.Kind, webhookRegistrator.GVK.Version, webhookRegistrator.GVK.Group)
 		failurePolicy := admissionregistrationv1.Fail
 		sideEffectsNone := admissionregistrationv1.SideEffectClassNone
 		webhookEndpoint := url.URL{
@@ -127,11 +125,11 @@ func registerWebhooks(logger logr.Logger, mgr ctrl.Manager, webhookAdvertiseHost
 			Path:   webhookRegistrator.WebhookPath,
 		}
 		webhookEndpointString := webhookEndpoint.String()
-		if err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Delete(ctx, webhookName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		if err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Delete(ctx, webhookRegistrator.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			logger.Error(err, "unable to cleanup existing webhook")
 			os.Exit(1)
 		}
-		if err := clientset.AdmissionregistrationV1().MutatingWebhookConfigurations().Delete(ctx, webhookName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		if err := clientset.AdmissionregistrationV1().MutatingWebhookConfigurations().Delete(ctx, webhookRegistrator.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			logger.Error(err, "unable to cleanup existing webhook")
 			os.Exit(1)
 		}
@@ -140,25 +138,16 @@ func registerWebhooks(logger logr.Logger, mgr ctrl.Manager, webhookAdvertiseHost
 				ctx,
 				&admissionregistrationv1.MutatingWebhookConfiguration{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: webhookName,
+						Name: webhookRegistrator.Name,
 					},
 					Webhooks: []admissionregistrationv1.MutatingWebhook{
 						{
-							Name: webhookName,
+							Name: webhookRegistrator.Name,
 							ClientConfig: admissionregistrationv1.WebhookClientConfig{
 								URL:      &webhookEndpointString,
 								CABundle: []byte(caCertificate),
 							},
-							Rules: []admissionregistrationv1.RuleWithOperations{
-								{
-									Rule: admissionregistrationv1.Rule{
-										APIGroups:   []string{webhookRegistrator.GVK.Group},
-										APIVersions: []string{webhookRegistrator.GVK.Version},
-										Resources:   webhookRegistrator.Resources,
-									},
-									Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.OperationAll},
-								},
-							},
+							Rules:                   webhookRegistrator.RulesWithOperations,
 							FailurePolicy:           &failurePolicy,
 							SideEffects:             &sideEffectsNone,
 							AdmissionReviewVersions: []string{"v1"},
@@ -176,25 +165,16 @@ func registerWebhooks(logger logr.Logger, mgr ctrl.Manager, webhookAdvertiseHost
 				ctx,
 				&admissionregistrationv1.ValidatingWebhookConfiguration{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: webhookName,
+						Name: webhookRegistrator.Name,
 					},
 					Webhooks: []admissionregistrationv1.ValidatingWebhook{
 						{
-							Name: webhookName,
+							Name: webhookRegistrator.Name,
 							ClientConfig: admissionregistrationv1.WebhookClientConfig{
 								URL:      &webhookEndpointString,
 								CABundle: []byte(caCertificate),
 							},
-							Rules: []admissionregistrationv1.RuleWithOperations{
-								{
-									Rule: admissionregistrationv1.Rule{
-										APIGroups:   []string{webhookRegistrator.GVK.Group},
-										APIVersions: []string{webhookRegistrator.GVK.Version},
-										Resources:   webhookRegistrator.Resources,
-									},
-									Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.OperationAll},
-								},
-							},
+							Rules:                   webhookRegistrator.RulesWithOperations,
 							FailurePolicy:           &failurePolicy,
 							SideEffects:             &sideEffectsNone,
 							AdmissionReviewVersions: []string{"v1"},
